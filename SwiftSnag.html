@@ -1,0 +1,328 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Swift Snag</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
+  <style>
+    body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background: #111; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script>
+let player;
+let goals = [];
+let score = 0;
+let highScore = localStorage.getItem('swiftSnagHighScore') ? parseInt(localStorage.getItem('swiftSnagHighScore')) : 0;
+let gameOver = false;
+let gameStarted = false;
+let dragging = false;
+let maxTimer = 5; // Starting and max timer in seconds
+let timeLeft = maxTimer;
+let goalCount = 4; // Number of goals
+let timeBonus = 0.3; // Seconds added per green goal
+let timePenalty = 1.5; // Seconds deducted per white ball
+let ballLifespan = 2; // Seconds each ball lasts
+let patternIndex = 0; // Track spawn pattern
+
+function setup() {
+  createCanvas(800, 600);
+  resetGame();
+}
+
+function resetGame() {
+  player = { x: 100, y: 300, r: 15 };
+  goals = [];
+  score = 0;
+  timeLeft = maxTimer;
+  patternIndex = floor(random(3)); // Random starting pattern
+  spawnGoals();
+}
+
+function spawnGoals() {
+  goals = [];
+  let patterns = [
+    // Wider Cluster: Goals spread further
+    () => {
+      let centerX = random(150, width - 150);
+      let centerY = random(150, height - 150);
+      return [
+        spawnGoalType(centerX, centerY),
+        spawnGoalType(centerX + random(-30, 30), centerY + random(-30, 30)),
+        spawnGoalType(centerX + random(-30, 30), centerY + random(-30, 30)),
+        spawnGoalType(centerX + random(-30, 30), centerY + random(-30, 30))
+      ];
+    },
+    // Longer Line: Goals in a longer line
+    () => {
+      let startX = random(150, width - 150);
+      let startY = random(150, height - 150);
+      let isHorizontal = random() > 0.5;
+      return [
+        spawnGoalType(startX, startY),
+        spawnGoalType(startX + (isHorizontal ? 80 : 0), startY + (isHorizontal ? 0 : 80)),
+        spawnGoalType(startX + (isHorizontal ? 160 : 0), startY + (isHorizontal ? 0 : 160)),
+        spawnGoalType(startX + (isHorizontal ? 240 : 0), startY + (isHorizontal ? 0 : 240))
+      ];
+    },
+    // Wider Triangle: Larger triangle
+    () => {
+      let centerX = random(150, width - 150);
+      let centerY = random(150, height - 150);
+      return [
+        spawnGoalType(centerX, centerY - 80),
+        spawnGoalType(centerX - 80, centerY + 40),
+        spawnGoalType(centerX + 80, centerY + 40),
+        spawnGoalType(centerX, centerY + 40)
+      ];
+    }
+  ];
+
+  let pattern = patterns[patternIndex];
+  let newGoals = pattern();
+  let attempts = 0;
+  let maxAttempts = 50;
+
+  while (attempts < maxAttempts) {
+    let valid = true;
+    for (let goal of newGoals) {
+      if (isGoalTooClose(goal)) {
+        valid = false;
+        break;
+      }
+    }
+    if (valid) {
+      goals = newGoals;
+      return;
+    }
+    newGoals = pattern();
+    attempts++;
+  }
+  // Fallback: Random spawn
+  for (let i = 0; i < goalCount; i++) {
+    spawnSingleGoal();
+  }
+}
+
+function spawnGoalType(x, y) {
+  let rand = random();
+  let type = rand < 0.03 ? 'gold' : rand < 0.23 ? 'white' : 'green'; // 3% gold, 20% white, 77% green
+  return { x, y, r: 10, type, age: 0 };
+}
+
+function spawnSingleGoal() {
+  let goal;
+  let attempts = 0;
+  let maxAttempts = 50;
+  do {
+    goal = spawnGoalType(random(50, width - 50), random(50, height - 50));
+    attempts++;
+  } while (isGoalTooClose(goal) && attempts < maxAttempts);
+  goals.push(goal);
+}
+
+function isGoalTooClose(newGoal) {
+  let minDist = 50;
+  if (dist(newGoal.x, newGoal.y, player.x, player.y) < minDist) {
+    return true;
+  }
+  for (let goal of goals) {
+    if (dist(newGoal.x, newGoal.y, goal.x, goal.y) < minDist) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function draw() {
+  background(0);
+
+  // Draw player (always visible)
+  fill(0, 0, 255);
+  ellipse(player.x, player.y, player.r * 2);
+
+  if (!gameStarted) {
+    textSize(32);
+    fill(255);
+    textAlign(CENTER, CENTER);
+    text("Swift Snag", width / 2, height / 2 - 70);
+    textSize(24);
+    text("Drag blue circle to green goals for points.", width / 2, height / 2 - 30);
+    text("Avoid white balls! Grab rare gold balls to fill timer.", width / 2, height / 2);
+    text(`High Score: ${highScore}`, width / 2, height / 2 + 40);
+    return;
+  }
+
+  if (gameOver) {
+    textSize(32);
+    fill(255, 0, 0);
+    textAlign(CENTER, CENTER);
+    text(`Game Over! Score: ${score}`, width / 2, height / 2 - 20);
+    text(`High Score: ${highScore}`, width / 2, height / 2 + 20);
+    text("Click/touch blue circle to restart", width / 2, height / 2 + 60);
+    return;
+  }
+
+  // Update timer and goal ages
+  let delta = deltaTime / 1000;
+  timeLeft -= delta;
+  for (let i = goals.length - 1; i >= 0; i--) {
+    let goal = goals[i];
+    goal.age += delta;
+    if (goal.age > ballLifespan) {
+      goals.splice(i, 1); // Remove expired goal
+      spawnSingleGoal(); // Spawn new goal
+      console.log(`${goal.type} ball expired, new goal spawned`);
+    }
+  }
+  if (timeLeft <= 0) {
+    gameOver = true;
+    console.log("Game Over: Time ran out");
+  }
+
+  // Draw goals
+  for (let goal of goals) {
+    if (goal.type === 'green') fill(0, 255, 0);
+    else if (goal.type === 'white') fill(255, 255, 255);
+    else if (goal.type === 'gold') fill(255, 215, 0);
+    ellipse(goal.x, goal.y, goal.r * 2);
+  }
+
+  // Draw timer bar
+  fill(255, 0, 0);
+  let timerWidth = map(timeLeft, 0, maxTimer, 0, 200);
+  rect(10, 70, timerWidth, 10);
+
+  // Draw score
+  textSize(20);
+  fill(255);
+  textAlign(LEFT, TOP);
+  text(`Score: ${score}`, 10, 10);
+  text(`High Score: ${highScore}`, 10, 40);
+
+  // Check for player-goal collisions
+  for (let i = goals.length - 1; i >= 0; i--) {
+    let goal = goals[i];
+    if (dist(player.x, player.y, goal.x, goal.y) < player.r + goal.r) {
+      if (goal.type === 'green') {
+        score += 1;
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem('swiftSnagHighScore', highScore);
+        }
+        timeLeft = Math.min(timeLeft + timeBonus, maxTimer); // Add 0.3s, cap at 5s
+        console.log("Green goal: Score:", score, "Time left:", timeLeft);
+      } else if (goal.type === 'white') {
+        timeLeft = Math.max(0, timeLeft - timePenalty); // Deduct 1.5s
+        console.log("White ball: Time left:", timeLeft);
+      } else if (goal.type === 'gold') {
+        timeLeft = maxTimer; // Fill to 5s
+        console.log("Gold ball: Time left:", timeLeft);
+      }
+      goals.splice(i, 1); // Remove goal
+      spawnSingleGoal(); // Spawn new goal
+      patternIndex = (patternIndex + 1) % 3; // Cycle pattern
+      if (goals.length === 0) {
+        spawnGoals(); // Respawn all goals in new pattern
+      }
+    }
+  }
+}
+
+function mousePressed() {
+  if (!gameStarted || gameOver) {
+    if (dist(mouseX, mouseY, player.x, player.y) < player.r) {
+      gameStarted = true;
+      gameOver = false;
+      resetGame();
+    }
+    return;
+  }
+  if (dist(mouseX, mouseY, player.x, player.y) < player.r) {
+    dragging = true;
+  }
+}
+
+function mouseDragged() {
+  if (gameOver || !gameStarted || !dragging) return;
+  player.x = constrain(mouseX, player.r, width - player.r);
+  player.y = constrain(mouseY, player.r, height - player.r);
+}
+
+function mouseReleased() {
+  dragging = false;
+}
+
+function touchStarted() {
+  let touchX = touches[0]?.x ?? mouseX;
+  let touchY = touches[0]?.y ?? mouseY;
+  if (!gameStarted || gameOver) {
+    if (dist(touchX, touchY, player.x, player.y) < player.r) {
+      gameStarted = true;
+      gameOver = false;
+      resetGame();
+    }
+    return false;
+  }
+  if (dist(touchX, touchY, player.x, player.y) < player.r) {
+    dragging = true;
+  }
+  return false;
+}
+
+function touchMoved() {
+  if (gameOver || !gameStarted || !dragging) return false;
+  let touchX = touches[0]?.x ?? mouseX;
+  let touchY = touches[0]?.y ?? mouseY;
+  player.x = constrain(touchX, player.r, width - player.r);
+  player.y = constrain(touchY, player.r, height - player.r);
+  return false;
+}
+
+function touchEnded() {
+  dragging = false;
+  return false;
+}
+</script>
+</body>
+</html>
